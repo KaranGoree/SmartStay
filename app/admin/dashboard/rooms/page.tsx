@@ -6,6 +6,7 @@ import {
   getAllApplications,
   assignRoom,
   updateApplication,
+  getRoomsByHostel,
 } from "@/lib/firebase/firestore"
 import type { Room, Application } from "@/lib/types"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,7 +31,7 @@ import {
 } from "@/components/ui/select"
 import { RoomGrid } from "@/components/admin/room-grid"
 import { toast } from "sonner"
-import { BedDouble, Users, Building2, Wand2 } from "lucide-react"
+import { BedDouble, Users, Building2, Wand2, User } from "lucide-react"
 
 export default function RoomsPage() {
   const [rooms, setRooms] = useState<Room[]>([])
@@ -40,6 +41,7 @@ export default function RoomsPage() {
   const [selectedStudent, setSelectedStudent] = useState<string>("")
   const [assigning, setAssigning] = useState(false)
   const [autoAssigning, setAutoAssigning] = useState(false)
+  const [selectedHostel, setSelectedHostel] = useState<"boys" | "girls">("boys")
 
   const fetchData = async () => {
     const [roomData, appData] = await Promise.all([
@@ -55,17 +57,23 @@ export default function RoomsPage() {
     fetchData()
   }, [])
 
+  // Filter rooms by hostel
+  const boysRooms = rooms.filter(r => r.hostel === "boys")
+  const girlsRooms = rooms.filter(r => r.hostel === "girls")
+  const currentRooms = selectedHostel === "boys" ? boysRooms : girlsRooms
+
+  // Filter applications by gender and status
   const confirmedWithoutRoom = applications.filter(
-    (a) => a.status === "confirmed" && !a.roomNumber
+    (a) => a.status === "confirmed" && !a.roomNumber && a.gender === (selectedHostel === "boys" ? "Male" : "Female")
   )
 
   const stats = {
-    total: rooms.length,
-    available: rooms.filter((r) => r.status === "available").length,
-    partial: rooms.filter((r) => r.status === "partial").length,
-    full: rooms.filter((r) => r.status === "full").length,
-    totalCapacity: rooms.reduce((acc, r) => acc + r.capacity, 0),
-    occupied: rooms.reduce((acc, r) => acc + r.occupants.length, 0),
+    total: currentRooms.length,
+    available: currentRooms.filter((r) => r.status === "available").length,
+    partial: currentRooms.filter((r) => r.status === "partial").length,
+    full: currentRooms.filter((r) => r.status === "full").length,
+    totalCapacity: currentRooms.reduce((acc, r) => acc + r.capacity, 0),
+    occupied: currentRooms.reduce((acc, r) => acc + r.occupants.length, 0),
   }
 
   const handleAssign = async () => {
@@ -73,11 +81,12 @@ export default function RoomsPage() {
 
     setAssigning(true)
     try {
-      const success = await assignRoom(selectedRoom.roomNumber, selectedStudent)
+      const success = await assignRoom(selectedRoom.id, selectedStudent)
       if (success) {
         await updateApplication(selectedStudent, {
           roomNumber: selectedRoom.roomNumber,
           floor: selectedRoom.floor,
+          hostel: selectedHostel,
         })
         toast.success("Room assigned successfully")
         await fetchData()
@@ -96,7 +105,7 @@ export default function RoomsPage() {
   const handleAutoAssign = async () => {
     setAutoAssigning(true)
     try {
-      const availableRooms = rooms
+      const availableRooms = currentRooms
         .filter((r) => r.status !== "full")
         .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber))
 
@@ -107,11 +116,12 @@ export default function RoomsPage() {
         while (roomIndex < availableRooms.length) {
           const room = availableRooms[roomIndex]
           if (room.occupants.length < room.capacity) {
-            const success = await assignRoom(room.roomNumber, student.id)
+            const success = await assignRoom(room.id, student.id)
             if (success) {
               await updateApplication(student.id, {
                 roomNumber: room.roomNumber,
                 floor: room.floor,
+                hostel: selectedHostel,
               })
               room.occupants.push(student.id)
               assigned++
@@ -122,7 +132,7 @@ export default function RoomsPage() {
         }
       }
 
-      toast.success(`Auto-assigned ${assigned} students to rooms`)
+      toast.success(`Auto-assigned ${assigned} students to rooms in ${selectedHostel === "boys" ? "Boys" : "Girls"} hostel`)
       await fetchData()
     } catch (error) {
       toast.error("Auto-assignment failed")
@@ -167,7 +177,7 @@ export default function RoomsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Room Management</h1>
-          <p className="text-muted-foreground">Manage hostel room assignments</p>
+          <p className="text-muted-foreground">Manage hostel room assignments for boys and girls hostels</p>
         </div>
         {confirmedWithoutRoom.length > 0 && (
           <Button onClick={handleAutoAssign} disabled={autoAssigning}>
@@ -181,94 +191,177 @@ export default function RoomsPage() {
         )}
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Rooms</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats.total}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              Available
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats.available}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
-              Partial
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats.partial}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-red-500" />
-              Full
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats.full}</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Hostel Tabs */}
+      <Tabs defaultValue="boys" onValueChange={(v) => setSelectedHostel(v as "boys" | "girls")}>
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="boys" className="flex items-center gap-2">
+            <User className="h-4 w-4 text-blue-600" />
+            Boys Hostel
+          </TabsTrigger>
+          <TabsTrigger value="girls" className="flex items-center gap-2">
+            <User className="h-4 w-4 text-pink-600" />
+            Girls Hostel
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Occupancy */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Occupancy</CardTitle>
-          <CardDescription>
-            {stats.occupied} of {stats.totalCapacity} beds occupied (
-            {Math.round((stats.occupied / stats.totalCapacity) * 100)}%)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="h-4 rounded-full bg-muted overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all"
-              style={{ width: `${(stats.occupied / stats.totalCapacity) * 100}%` }}
-            />
+        <TabsContent value="boys" className="space-y-6">
+          {/* Stats for Boys Hostel */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card className="border-blue-200 bg-blue-50/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-blue-700">Total Rooms</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-blue-700">{stats.total}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  Available
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.available}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  Partial
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.partial}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  Full
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.full}</p>
+              </CardContent>
+            </Card>
           </div>
-        </CardContent>
-      </Card>
 
-      {/* Floor Tabs */}
+          {/* Occupancy for Boys Hostel */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Occupancy - Boys Hostel</CardTitle>
+              <CardDescription>
+                {stats.occupied} of {stats.totalCapacity} beds occupied (
+                {Math.round((stats.occupied / stats.totalCapacity) * 100)}%)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-4 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all"
+                  style={{ width: `${(stats.occupied / stats.totalCapacity) * 100}%` }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="girls" className="space-y-6">
+          {/* Stats for Girls Hostel */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card className="border-pink-200 bg-pink-50/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-pink-700">Total Rooms</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-pink-700">{stats.total}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  Available
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.available}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  Partial
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.partial}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  Full
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold">{stats.full}</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Occupancy for Girls Hostel */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Occupancy - Girls Hostel</CardTitle>
+              <CardDescription>
+                {stats.occupied} of {stats.totalCapacity} beds occupied (
+                {Math.round((stats.occupied / stats.totalCapacity) * 100)}%)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-4 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-pink-500 transition-all"
+                  style={{ width: `${(stats.occupied / stats.totalCapacity) * 100}%` }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Room Layout */}
       <Card>
         <CardHeader>
-          <CardTitle>Room Layout</CardTitle>
+          <CardTitle>Room Layout - {selectedHostel === "boys" ? "Boys" : "Girls"} Hostel</CardTitle>
           <CardDescription>
             Click on a room to view details or assign students
           </CardDescription>
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="1">
-            <TabsList className="grid grid-cols-6 mb-4">
-              {[1, 2, 3, 4, 5, 6].map((floor) => (
+            <TabsList className="grid grid-cols-5 mb-4">
+              {[1, 2, 3, 4, 5].map((floor) => (
                 <TabsTrigger key={floor} value={floor.toString()}>
                   Floor {floor}
                 </TabsTrigger>
               ))}
             </TabsList>
-            {[1, 2, 3, 4, 5, 6].map((floor) => (
+            {[1, 2, 3, 4, 5].map((floor) => (
               <TabsContent key={floor} value={floor.toString()}>
                 <RoomGrid
-                  rooms={rooms}
+                  rooms={currentRooms}
                   applications={applications}
                   floor={floor}
                   onRoomClick={setSelectedRoom}
+                  hostelType={selectedHostel}
                 />
               </TabsContent>
             ))}
@@ -282,7 +375,7 @@ export default function RoomsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Users className="h-5 w-5" />
-              Awaiting Room Assignment
+              Awaiting Room Assignment - {selectedHostel === "boys" ? "Boys" : "Girls"} Hostel
             </CardTitle>
             <CardDescription>
               {confirmedWithoutRoom.length} confirmed students without rooms
@@ -293,7 +386,11 @@ export default function RoomsPage() {
               {confirmedWithoutRoom.map((student) => (
                 <div
                   key={student.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                  className={`flex items-center justify-between p-3 rounded-lg ${
+                    selectedHostel === "boys" 
+                      ? "bg-blue-50/50 border border-blue-100" 
+                      : "bg-pink-50/50 border border-pink-100"
+                  }`}
                 >
                   <div>
                     <p className="font-medium text-sm">{student.fullName}</p>
@@ -301,7 +398,11 @@ export default function RoomsPage() {
                       {student.branch} - Year {student.year}
                     </p>
                   </div>
-                  <Badge variant="outline">Pending</Badge>
+                  <Badge variant="outline" className={
+                    selectedHostel === "boys" ? "border-blue-200 bg-blue-100" : "border-pink-200 bg-pink-100"
+                  }>
+                    Pending
+                  </Badge>
                 </div>
               ))}
             </div>
@@ -317,7 +418,7 @@ export default function RoomsPage() {
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <BedDouble className="h-5 w-5" />
-                  Room {selectedRoom.roomNumber}
+                  Room {selectedRoom.roomNumber} - {selectedRoom.hostel === "boys" ? "Boys" : "Girls"} Hostel
                 </DialogTitle>
                 <DialogDescription>
                   Floor {selectedRoom.floor} | Capacity: {selectedRoom.capacity}

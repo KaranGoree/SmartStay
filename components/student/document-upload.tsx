@@ -32,13 +32,10 @@ export function DocumentUpload({
   const [isProcessing, setIsProcessing] = useState(false)
   const [ocrProgress, setOcrProgress] = useState<OCRProgress | null>(null)
   const [ocrComplete, setOcrComplete] = useState(false)
-
-  const [ocrText, setOcrText] = useState<string>("")
   const [error, setError] = useState<string>("")
 
   const processFile = async (file: File) => {
     setError("")
-    setOcrText("")
     setOcrComplete(false)
 
     // Preview image
@@ -64,8 +61,6 @@ export function DocumentUpload({
           throw new Error("No text extracted from image. Please ensure the image is clear and readable.")
         }
 
-        setOcrText(text)
-
         // Step 2: Extract basic info using regex patterns (as fallback)
         const extractedData: Partial<OCRData> = {}
         
@@ -87,7 +82,7 @@ export function DocumentUpload({
           extractedData.extractedMarks = parseInt(marksMatch[1])
         }
 
-        // Send raw text and extracted data to parent
+        // Send raw text and extracted data to parent (for processing only, not display)
         onOCRComplete(extractedData, text)
 
         setOcrComplete(true)
@@ -120,7 +115,6 @@ export function DocumentUpload({
   const handleRemove = () => {
     onChange("")
     setOcrComplete(false)
-    setOcrText("")
     setError("")
   }
 
@@ -175,18 +169,6 @@ export function DocumentUpload({
               <div className="text-red-500 text-sm bg-red-50 p-2 rounded">
                 ❌ {error}
               </div>
-            )}
-
-            {/* OCR Raw Text (Collapsible) */}
-            {ocrText && !isProcessing && (
-              <details className="bg-muted p-3 rounded text-xs">
-                <summary className="font-semibold cursor-pointer hover:text-primary">
-                  Show Extracted Text
-                </summary>
-                <pre className="whitespace-pre-wrap mt-2 overflow-auto max-h-32">
-                  {ocrText}
-                </pre>
-              </details>
             )}
           </div>
         ) : (

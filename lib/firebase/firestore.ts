@@ -15,7 +15,7 @@ import {
   Timestamp,
 } from "firebase/firestore"
 import { db } from "./config"
-import type { Application, Room, Settings, User, Category, DEFAULT_SEAT_DISTRIBUTION } from "@/lib/types"
+import type { Application, Room, Settings, User, Category } from "@/lib/types"
 
 // Users
 export async function getUser(uid: string): Promise<User | null> {
@@ -93,27 +93,119 @@ export async function getApplicationsByBranchYear(branch: string, year: number):
 
 // Rooms
 export async function initializeRooms(): Promise<void> {
-  const batch = writeBatch(db)
-  
-  for (let floor = 1; floor <= 6; floor++) {
-    for (let room = 1; room <= 16; room++) {
-      const roomNumber = `${floor}${room.toString().padStart(2, "0")}`
-      const docRef = doc(db, "rooms", roomNumber)
-      batch.set(docRef, {
-        roomNumber,
-        floor,
-        capacity: 2,
-        occupants: [],
-        status: "available",
-      })
+  try {
+    const batch = writeBatch(db)
+    
+    // Delete all existing rooms
+    const allRooms = await getAllRooms()
+    for (const room of allRooms) {
+      const docRef = doc(db, "rooms", room.id || `${room.hostel || "boys"}_${room.roomNumber}`)
+      batch.delete(docRef)
     }
+    
+    // Initialize boys hostel rooms (5 floors, 16 rooms each, capacity 2)
+    let roomCount = 0
+    for (let floor = 1; floor <= 5; floor++) {
+      for (let roomNum = 1; roomNum <= 16; roomNum++) {
+        const roomNumber = `${floor}${roomNum.toString().padStart(2, "0")}`
+        const docRef = doc(db, "rooms", `boys_${roomNumber}`)
+        batch.set(docRef, {
+          id: `boys_${roomNumber}`,
+          roomNumber: roomNumber,
+          floor: floor,
+          capacity: 2,
+          occupants: [],
+          hostel: "boys",
+          status: "available",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        roomCount++
+      }
+    }
+    
+    // Initialize girls hostel rooms (3 floors, 12 rooms each, capacity 2)
+    for (let floor = 1; floor <= 3; floor++) {
+      for (let roomNum = 1; roomNum <= 12; roomNum++) {
+        const roomNumber = `${floor}${roomNum.toString().padStart(2, "0")}`
+        const docRef = doc(db, "rooms", `girls_${roomNumber}`)
+        batch.set(docRef, {
+          id: `girls_${roomNumber}`,
+          roomNumber: roomNumber,
+          floor: floor,
+          capacity: 2,
+          occupants: [],
+          hostel: "girls",
+          status: "available",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        roomCount++
+      }
+    }
+    
+    await batch.commit()
+    console.log(`Initialized ${roomCount} rooms (Boys: 80, Girls: 36)`)
+  } catch (error) {
+    console.error("Error initializing rooms:", error)
+    throw error
   }
-  
-  await batch.commit()
 }
 
-export async function getRoom(roomNumber: string): Promise<Room | null> {
-  const docRef = doc(db, "rooms", roomNumber)
+// Initialize rooms for a specific hostel
+export async function initializeRoomsByHostel(
+  hostelType: "boys" | "girls",
+  hostelConfig: {
+    floors: number
+    roomsPerFloor: number
+    capacityPerRoom: number
+    name: string
+  }
+): Promise<number> {
+  try {
+    const batch = writeBatch(db)
+    let roomCount = 0
+    
+    // First, delete existing rooms for this hostel
+    const existingRoomsQuery = query(collection(db, "rooms"), where("hostel", "==", hostelType))
+    const existingRooms = await getDocs(existingRoomsQuery)
+    
+    for (const doc of existingRooms.docs) {
+      batch.delete(doc.ref)
+    }
+    
+    // Create new rooms
+    for (let floor = 1; floor <= hostelConfig.floors; floor++) {
+      for (let roomNum = 1; roomNum <= hostelConfig.roomsPerFloor; roomNum++) {
+        const roomNumber = `${floor}${roomNum.toString().padStart(2, "0")}`
+        const docRef = doc(db, "rooms", `${hostelType}_${roomNumber}`)
+        
+        batch.set(docRef, {
+          id: `${hostelType}_${roomNumber}`,
+          roomNumber: roomNumber,
+          floor: floor,
+          capacity: hostelConfig.capacityPerRoom,
+          occupants: [],
+          hostel: hostelType,
+          status: "available",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        roomCount++
+      }
+    }
+    
+    await batch.commit()
+    console.log(`Initialized ${roomCount} rooms for ${hostelType} hostel`)
+    return roomCount
+  } catch (error) {
+    console.error("Error initializing rooms:", error)
+    throw error
+  }
+}
+
+export async function getRoom(roomId: string): Promise<Room | null> {
+  const docRef = doc(db, "rooms", roomId)
   const docSnap = await getDoc(docRef)
   return docSnap.exists() ? (docSnap.data() as Room) : null
 }
@@ -124,28 +216,97 @@ export async function getAllRooms(): Promise<Room[]> {
   return querySnapshot.docs.map((doc) => doc.data() as Room)
 }
 
-export async function assignRoom(roomNumber: string, applicationId: string): Promise<boolean> {
-  const room = await getRoom(roomNumber)
+export async function getRoomsByHostel(hostelType: "boys" | "girls"): Promise<Room[]> {
+  try {
+    const q = query(
+      collection(db, "rooms"), 
+      where("hostel", "==", hostelType),
+      orderBy("roomNumber")
+    )
+    const querySnapshot = await getDocs(q)
+    return querySnapshot.docs.map((doc) => doc.data() as Room)
+  } catch (error) {
+    console.error("Error getting rooms by hostel:", error)
+    throw error
+  }
+}
+
+export async function getHostelStats(hostelType: "boys" | "girls"): Promise<{
+  totalRooms: number
+  availableRooms: number
+  occupiedRooms: number
+  totalOccupants: number
+  totalCapacity: number
+  occupancyRate: number
+}> {
+  try {
+    const q = query(collection(db, "rooms"), where("hostel", "==", hostelType))
+    const querySnapshot = await getDocs(q)
+    
+    const rooms = querySnapshot.docs.map((doc) => doc.data() as Room)
+    const totalRooms = rooms.length
+    const availableRooms = rooms.filter(room => room.status === "available").length
+    const occupiedRooms = rooms.filter(room => room.status === "full" || room.status === "partial").length
+    const totalOccupants = rooms.reduce((sum, room) => sum + (room.occupants?.length || 0), 0)
+    const totalCapacity = rooms.reduce((sum, room) => sum + (room.capacity || 0), 0)
+    const occupancyRate = totalCapacity > 0 ? (totalOccupants / totalCapacity) * 100 : 0
+    
+    return {
+      totalRooms,
+      availableRooms,
+      occupiedRooms,
+      totalOccupants,
+      totalCapacity,
+      occupancyRate
+    }
+  } catch (error) {
+    console.error("Error getting hostel stats:", error)
+    throw error
+  }
+}
+
+export async function assignRoom(roomId: string, applicationId: string): Promise<boolean> {
+  const room = await getRoom(roomId)
   if (!room || room.occupants.length >= room.capacity) return false
   
   const newOccupants = [...room.occupants, applicationId]
-  await updateDoc(doc(db, "rooms", roomNumber), {
+  await updateDoc(doc(db, "rooms", roomId), {
     occupants: newOccupants,
     status: newOccupants.length >= room.capacity ? "full" : "partial",
+    updatedAt: serverTimestamp(),
   })
   
   return true
 }
 
-export async function removeFromRoom(roomNumber: string, applicationId: string): Promise<void> {
-  const room = await getRoom(roomNumber)
+export async function removeFromRoom(roomId: string, applicationId: string): Promise<void> {
+  const room = await getRoom(roomId)
   if (!room) return
   
   const newOccupants = room.occupants.filter((id) => id !== applicationId)
-  await updateDoc(doc(db, "rooms", roomNumber), {
+  await updateDoc(doc(db, "rooms", roomId), {
     occupants: newOccupants,
     status: newOccupants.length === 0 ? "available" : "partial",
+    updatedAt: serverTimestamp(),
   })
+}
+
+export async function removeFromRoomByApplicationId(applicationId: string): Promise<void> {
+  // Find which room the application is in
+  const application = await getApplication(applicationId)
+  if (!application || !application.roomNumber) return
+  
+  // Find the room with this room number
+  const roomsQuery = query(collection(db, "rooms"), where("roomNumber", "==", application.roomNumber))
+  const roomsSnapshot = await getDocs(roomsQuery)
+  
+  for (const roomDoc of roomsSnapshot.docs) {
+    const room = roomDoc.data() as Room
+    if (room.occupants.includes(applicationId)) {
+      await removeFromRoom(roomDoc.id, applicationId)
+      break
+    }
+  }
 }
 
 // Settings
@@ -160,7 +321,7 @@ export async function updateSettings(data: Partial<Settings>): Promise<void> {
   await setDoc(docRef, data, { merge: true })
 }
 
-export async function initializeSettings(seatDistribution: typeof DEFAULT_SEAT_DISTRIBUTION): Promise<void> {
+export async function initializeSettings(seatDistribution: Record<Category, number>): Promise<void> {
   const deadline = new Date()
   deadline.setDate(deadline.getDate() + 30) // 30 days from now
   
@@ -169,6 +330,30 @@ export async function initializeSettings(seatDistribution: typeof DEFAULT_SEAT_D
     confirmationPeriodDays: 3,
     seatDistribution,
     seatsPerBranchYear: 10,
+    hostels: {
+      boys: {
+        name: "Boys Hostel",
+        type: "boys",
+        totalCapacity: 160,
+        seatDistribution: seatDistribution,
+        seatsPerBranchYear: 10,
+        floors: 5,
+        roomsPerFloor: 16,
+        capacityPerRoom: 2,
+      },
+      girls: {
+        name: "Girls Hostel",
+        type: "girls",
+        totalCapacity: 72,
+        seatDistribution: seatDistribution,
+        seatsPerBranchYear: 10,
+        floors: 3,
+        roomsPerFloor: 12,
+        capacityPerRoom: 2,
+      },
+    },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   })
 }
 
@@ -184,13 +369,4 @@ export async function batchUpdateApplications(
   }
   
   await batch.commit()
-}
-// Add this function to your firestore.ts file
-export async function removeFromRoomByApplicationId(applicationId: string): Promise<void> {
-  // Find which room the application is in
-  const application = await getApplication(applicationId)
-  if (!application || !application.roomNumber) return
-  
-  // Remove from room
-  await removeFromRoom(application.roomNumber, applicationId)
 }
